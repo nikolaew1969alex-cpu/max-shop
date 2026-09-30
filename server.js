@@ -164,6 +164,50 @@ app.post("/api/admin/products", admin, upload.single("image"), async (req, res, 
   } catch (e) { next(e); }
 });
 
+app.put("/api/admin/products/:id", admin, upload.single("image"), async (req, res, next) => {
+  try {
+    const id = req.params.id;
+    const name = String(req.body.name || "").trim();
+    const price = Number(req.body.price || 0);
+    const description = String(req.body.description || "").trim();
+    const stock = Number(req.body.stock || 0);
+    if (!name || !Number.isFinite(price) || price <= 0) return res.status(400).json({ error: "Нужно указать название и цену" });
+    if (!Number.isInteger(stock) || stock < 0) return res.status(400).json({ error: "Остаток должен быть целым числом не меньше 0" });
+
+    if (!pool) {
+      const products = readJson(productsFile, []);
+      const index = products.findIndex(x => x.id === id);
+      if (index < 0) return res.status(404).json({ error: "Товар не найден" });
+      const old = products[index];
+      const updated = { ...old, name, price, description, stock };
+      if (req.file) {
+        const filename = crypto.randomUUID() + (path.extname(req.file.originalname).toLowerCase() || ".jpg");
+        fs.writeFileSync(path.join(UPLOADS, filename), req.file.buffer);
+        updated.image = "/uploads/" + filename;
+      }
+      products[index] = updated;
+      writeJson(productsFile, products);
+      return res.json(updated);
+    }
+
+    if (req.file) {
+      const result = await pool.query(
+        `UPDATE products SET name=$1,price=$2,description=$3,stock=$4,image_data=$5,image_mime=$6 WHERE id=$7 RETURNING id,name,price,description,stock,image_data,active,created_at`,
+        [name, price, description, stock, req.file.buffer, req.file.mimetype, id]
+      );
+      if (!result.rows[0]) return res.status(404).json({ error: "Товар не найден" });
+      return res.json(productFromRow(result.rows[0]));
+    }
+
+    const result = await pool.query(
+      `UPDATE products SET name=$1,price=$2,description=$3,stock=$4 WHERE id=$5 RETURNING id,name,price,description,stock,image_data,active,created_at`,
+      [name, price, description, stock, id]
+    );
+    if (!result.rows[0]) return res.status(404).json({ error: "Товар не найден" });
+    res.json(productFromRow(result.rows[0]));
+  } catch (e) { next(e); }
+});
+
 app.delete("/api/admin/products/:id", admin, async (req, res, next) => {
   try {
     if (!pool) {
