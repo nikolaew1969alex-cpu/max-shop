@@ -1,1 +1,132 @@
-const express=require("express");const multer=require("multer");const fs=require("fs");const path=require("path");const crypto=require("crypto");const {Pool}=require("pg");const app=express();const PORT=process.env.PORT||3000;const ADMIN_PASSWORD=process.env.ADMIN_PASSWORD||"change-me";const ROOT=__dirname,DATA=path.join(ROOT,"data"),UPLOADS=path.join(ROOT,"uploads");fs.mkdirSync(DATA,{recursive:true});fs.mkdirSync(UPLOADS,{recursive:true});const productsFile=path.join(DATA,"products.json"),ordersFile=path.join(DATA,"orders.json");const readJson=(f,d)=>{try{return JSON.parse(fs.readFileSync(f,"utf8"))}catch{return d}};const writeJson=(f,v)=>fs.writeFileSync(f,JSON.stringify(v,null,2),"utf8");app.use(express.json({limit:"2mb"}));app.use(express.static(path.join(ROOT,"public")));const upload=multer({storage:multer.memoryStorage(),limits:{fileSize:100*1024*1024,files:7},fileFilter:(_,f,cb)=>{const ok=/^(image\/(jpeg|png|webp|gif)|video\/(mp4|webm))$/.test(f.mimetype);cb(ok?null:new Error("Разрешены JPG, PNG, WEBP, GIF и видео MP4/WEBM"),ok)}});function admin(req,res,next){if(req.headers["x-admin-password"]!==ADMIN_PASSWORD)return res.status(401).json({error:"Неверный пароль администратора"});next()}const pool=process.env.DATABASE_URL?new Pool({connectionString:process.env.DATABASE_URL,ssl:{rejectUnauthorized:false}}):null;async function initDb(){if(!pool)return;await pool.query(`CREATE TABLE IF NOT EXISTS products(id TEXT PRIMARY KEY,name TEXT NOT NULL,price NUMERIC(12,2) NOT NULL,description TEXT NOT NULL DEFAULT '',stock INTEGER NOT NULL DEFAULT 0,image_data BYTEA,image_mime TEXT,images JSONB NOT NULL DEFAULT '[]'::jsonb,video_data BYTEA,video_mime TEXT,active BOOLEAN NOT NULL DEFAULT TRUE,created_at TIMESTAMPTZ NOT NULL DEFAULT NOW());CREATE TABLE IF NOT EXISTS orders(id TEXT PRIMARY KEY,status TEXT NOT NULL DEFAULT 'new',customer JSONB NOT NULL,items JSONB NOT NULL,delivery TEXT NOT NULL,created_at TIMESTAMPTZ NOT NULL DEFAULT NOW());CREATE TABLE IF NOT EXISTS shop_settings(key TEXT PRIMARY KEY,value TEXT NOT NULL DEFAULT '');ALTER TABLE products ADD COLUMN IF NOT EXISTS images JSONB NOT NULL DEFAULT '[]'::jsonb;ALTER TABLE products ADD COLUMN IF NOT EXISTS video_data BYTEA;ALTER TABLE products ADD COLUMN IF NOT EXISTS video_mime TEXT;INSERT INTO shop_settings(key,value)VALUES('manager_phone','') ON CONFLICT(key) DO NOTHING;`)}function productFromRow(r){const imgs=Array.isArray(r.images)?r.images:[];const gallery=imgs.length?imgs.map((_,i)=>`/api/gallery/${r.id}/${i}`):(r.image_data?[`/api/images/${r.id}`]:[]);return{id:r.id,name:r.name,price:Number(r.price),description:r.description,stock:r.stock,image:gallery[0]||"",images:gallery,video:r.video_data?`/api/video/${r.id}`:"",active:r.active,createdAt:r.created_at}}async function getProducts(){if(!pool)return readJson(productsFile,[]);const{rows}=await pool.query("SELECT * FROM products ORDER BY created_at DESC");return rows.map(productFromRow)}app.get("/api/products",async(_,res,next)=>{try{res.json(await getProducts())}catch(e){next(e)}});app.get("/api/settings",async(_,res,next)=>{try{if(!pool)return res.json({managerPhone:readJson(path.join(DATA,"settings.json"),{managerPhone:""}).managerPhone||""});const{rows}=await pool.query("SELECT value FROM shop_settings WHERE key='manager_phone'");res.json({managerPhone:rows[0]?.value||""})}catch(e){next(e)}});app.get("/api/images/:id",async(req,res,next)=>{try{const{rows}=await pool.query("SELECT image_data,image_mime FROM products WHERE id=$1",[req.params.id]);if(!rows[0]?.image_data)return res.status(404).end();res.set("Cache-Control","public, max-age=3600");res.type(rows[0].image_mime||"image/jpeg").send(rows[0].image_data)}catch(e){next(e)}});app.get("/api/gallery/:id/:index",async(req,res,next)=>{try{const{rows}=await pool.query("SELECT images FROM products WHERE id=$1",[req.params.id]);const x=rows[0]?.images?.[Number(req.params.index)];if(!x?.data)return res.status(404).end();res.set("Cache-Control","public, max-age=3600");res.type(x.mime||"image/jpeg").send(Buffer.from(x.data,"base64"))}catch(e){next(e)}});async function sendVideo(req,res,next){try{const{rows}=await pool.query("SELECT video_data,video_mime FROM products WHERE id=$1",[req.params.id]);const row=rows[0];if(!row?.video_data)return res.status(404).end();const data=Buffer.from(row.video_data);const mime=row.video_mime||"video/mp4";const size=data.length;res.set("Accept-Ranges","bytes");res.set("Cache-Control","public, max-age=3600");res.type(mime);if(req.method==="HEAD")return res.status(200).set("Content-Length",String(size)).end();const range=req.headers.range;if(!range){res.set("Content-Length",String(size));return res.status(200).send(data)}const m=/bytes=(\d*)-(\d*)/.exec(range);if(!m)return res.status(416).set("Content-Range",`bytes */${size}`).end();let start=m[1]?Number(m[1]):Math.max(0,size-(Number(m[2])||0));let end=m[2]?Number(m[2]):size-1;if(!Number.isFinite(start)||!Number.isFinite(end)||start<0||start>=size||end<start)return res.status(416).set("Content-Range",`bytes */${size}`).end();end=Math.min(end,size-1);res.status(206).set({"Content-Range":`bytes ${start}-${end}/${size}`,"Content-Length":String(end-start+1)});return res.send(data.subarray(start,end+1))}catch(e){next(e)}}app.get("/api/video/:id",sendVideo);app.head("/api/video/:id",sendVideo);app.get("/api/admin/settings",admin,async(_,res,next)=>{try{if(!pool)return res.json(readJson(path.join(DATA,"settings.json"),{managerPhone:""}));const{rows}=await pool.query("SELECT value FROM shop_settings WHERE key='manager_phone'");res.json({managerPhone:rows[0]?.value||""})}catch(e){next(e)}});app.put("/api/admin/settings",admin,async(req,res,next)=>{try{const managerPhone=String(req.body?.managerPhone||"").trim();if(!pool){const f=path.join(DATA,"settings.json");writeJson(f,{managerPhone});return res.json({ok:true,managerPhone})}await pool.query("INSERT INTO shop_settings(key,value)VALUES('manager_phone',$1) ON CONFLICT(key) DO UPDATE SET value=EXCLUDED.value",[managerPhone]);res.json({ok:true,managerPhone})}catch(e){next(e)}});app.post("/api/admin/products",admin,upload.fields([{name:"images",maxCount:6},{name:"video",maxCount:1}]),async(req,res,next)=>{try{const name=String(req.body.name||"").trim(),price=Number(req.body.price||0),description=String(req.body.description||"").trim(),stock=Number(req.body.stock||0);if(!name||price<=0)return res.status(400).json({error:"Нужно указать название и цену"});const pics=(req.files?.images||[]).slice(0,6),video=req.files?.video?.[0],id=crypto.randomUUID(),createdAt=new Date().toISOString();if(!pool)return res.status(400).json({error:"Для фото и видео нужно подключить постоянное хранилище"});const images=pics.map(f=>({data:f.buffer.toString("base64"),mime:f.mimetype}));const{rows}=await pool.query(`INSERT INTO products(id,name,price,description,stock,image_data,image_mime,images,video_data,video_mime,active,created_at)VALUES($1,$2,$3,$4,$5,$6,$7,$8::jsonb,$9,$10,true,$11)RETURNING *`,[id,name,price,description,stock,pics[0]?.buffer||null,pics[0]?.mimetype||null,JSON.stringify(images),video?.buffer||null,video?.mimetype||null,createdAt]);res.json(productFromRow(rows[0]))}catch(e){next(e)}});app.put("/api/admin/products/:id",admin,upload.fields([{name:"images",maxCount:6},{name:"video",maxCount:1}]),async(req,res,next)=>{try{const id=req.params.id,name=String(req.body.name||"").trim(),price=Number(req.body.price||0),description=String(req.body.description||"").trim(),stock=Number(req.body.stock||0);if(!name||price<=0)return res.status(400).json({error:"Нужно указать название и цену"});const pics=(req.files?.images||[]).slice(0,6),video=req.files?.video?.[0];let sql="UPDATE products SET name=$1,price=$2,description=$3,stock=$4",params=[name,price,description,stock],n=5;if(pics.length){sql+=`,image_data=$${n},image_mime=$${n+1},images=$${n+2}::jsonb`;params.push(pics[0].buffer,pics[0].mimetype,JSON.stringify(pics.map(f=>({data:f.buffer.toString("base64"),mime:f.mimetype}))));n+=3}if(video){sql+=`,video_data=$${n},video_mime=$${n+1}`;params.push(video.buffer,video.mimetype);n+=2}sql+=` WHERE id=$${n} RETURNING *`;params.push(id);const{rows}=await pool.query(sql,params);if(!rows[0])return res.status(404).json({error:"Товар не найден"});res.json(productFromRow(rows[0]))}catch(e){next(e)}});app.delete("/api/admin/products/:id",admin,async(req,res,next)=>{try{await pool.query("DELETE FROM products WHERE id=$1",[req.params.id]);res.json({ok:true})}catch(e){next(e)}});app.post("/api/orders",async(req,res,next)=>{try{const{customer,items,delivery}=req.body||{};if(!customer||!items?.length||!delivery)return res.status(400).json({error:"Заполните покупателя, товары и доставку"});const order={id:"MAX-"+Date.now()+"-"+crypto.randomBytes(2).toString("hex"),status:"new",customer,items,delivery,createdAt:new Date().toISOString()};if(pool)await pool.query(`INSERT INTO orders(id,status,customer,items,delivery,created_at)VALUES($1,$2,$3::jsonb,$4::jsonb,$5,$6)`,[order.id,order.status,JSON.stringify(customer),JSON.stringify(items),delivery,order.createdAt]);else{const os=readJson(ordersFile,[]);os.push(order);writeJson(ordersFile,os)}res.json({ok:true,order})}catch(e){next(e)}});app.get("/api/admin/orders",admin,async(_,res,next)=>{try{if(!pool)return res.json(readJson(ordersFile,[]));const{rows}=await pool.query("SELECT * FROM orders ORDER BY created_at DESC");res.json(rows.map(r=>({id:r.id,status:r.status,customer:r.customer,items:r.items,delivery:r.delivery,createdAt:r.created_at})))}catch(e){next(e)}});app.delete("/api/admin/orders/:id",admin,async(req,res,next)=>{try{if(!pool){const os=readJson(ordersFile,[]),nextOrders=os.filter(o=>o.id!==req.params.id);if(nextOrders.length===os.length)return res.status(404).json({error:"Заказ не найден"});writeJson(ordersFile,nextOrders);return res.json({ok:true})}const result=await pool.query("DELETE FROM orders WHERE id=$1",[req.params.id]);if(!result.rowCount)return res.status(404).json({error:"Заказ не найден"});res.json({ok:true})}catch(e){next(e)}});app.get("/api/health",async(_,res)=>{if(!pool)return res.json({ok:true,storage:"file"});try{await pool.query("SELECT 1");res.json({ok:true,storage:"postgres"})}catch{res.status(503).json({ok:false,storage:"postgres"})}});app.use((err,_,res,__)=>res.status(400).json({error:err.message||"Ошибка"}));(async()=>{if(pool){await initDb();console.log("Persistent PostgreSQL storage enabled")}else console.log("DATABASE_URL is not set; using local file storage");app.listen(PORT,()=>console.log(`MAX shop listening on ${PORT}`))})().catch(e=>{console.error("Database initialization failed",e);process.exit(1)})
+const express = require('express');
+const multer = require('multer');
+const crypto = require('crypto');
+const path = require('path');
+const { createClient } = require('@supabase/supabase-js');
+
+const E = process.env;
+const sb = createClient(E.SUPABASE_URL, E.SUPABASE_SERVICE_KEY, { auth: { persistSession: false } });
+const BUCKET = 'media';
+const MAX_API = 'https://platform-api.max.ru';
+
+const app = express();
+app.use(express.json({ limit: '100kb' }));
+app.use(express.static(path.join(__dirname, 'public')));
+app.get('/admin', (_, res) => res.sendFile(path.join(__dirname, 'public', 'admin.html')));
+app.get('/health', (_, res) => res.send('ok'));
+
+const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 5 * 1024 * 1024 } });
+const EXT = { 'image/jpeg': 'jpg', 'image/png': 'png', 'image/webp': 'webp', 'image/gif': 'gif' };
+
+const eq = (a, b) => {
+  a = Buffer.from(String(a || '')); b = Buffer.from(String(b || ''));
+  return a.length === b.length && crypto.timingSafeEqual(a, b);
+};
+const isAdmin = (req, res, next) =>
+  E.ADMIN_PASSWORD && eq(req.get('x-admin-token'), E.ADMIN_PASSWORD) ? next() : res.status(401).json({ error: 'Неверный пароль' });
+const h = fn => (req, res) => fn(req, res).catch(e => { console.error(e); res.status(500).json({ error: 'Ошибка сервера' }); });
+const ok = r => { if (r.error) throw r.error; return r.data; };
+const rub = n => Number(n).toLocaleString('ru-RU') + ' ₽';
+
+// ---------- MAX ----------
+async function maxSend(userId, text, attachments) {
+  if (!E.MAX_BOT_TOKEN || !userId) return;
+  try {
+    const r = await fetch(`${MAX_API}/messages?user_id=${userId}`, {
+      method: 'POST',
+      headers: { Authorization: E.MAX_BOT_TOKEN, 'Content-Type': 'application/json' },
+      body: JSON.stringify({ text, attachments })
+    });
+    if (!r.ok) console.error('MAX send', r.status, await r.text());
+  } catch (e) { console.error('MAX send failed', e.message); }
+}
+const shopButton = () => [{ type: 'inline_keyboard', payload: { buttons: [[{ type: 'link', text: 'Открыть магазин', url: E.PUBLIC_URL }]] } }];
+const greet = uid => maxSend(uid, 'Здравствуйте! Выбирайте товары в нашем магазине.', shopButton());
+
+app.post('/webhook', (req, res) => {
+  if (E.WEBHOOK_SECRET && !eq(req.get('X-Max-Bot-Api-Secret'), E.WEBHOOK_SECRET)) return res.sendStatus(401);
+  res.sendStatus(200);
+  const u = req.body || {};
+  if (u.update_type === 'bot_started') greet(u.user && u.user.user_id);
+  else if (u.update_type === 'message_created') {
+    const m = u.message || {}, uid = m.sender && m.sender.user_id, t = ((m.body && m.body.text) || '').trim();
+    if (t === '/id') maxSend(uid, 'Ваш MAX user_id: ' + uid);
+    else greet(uid);
+  }
+});
+
+async function subscribe() {
+  if (!E.MAX_BOT_TOKEN || !E.PUBLIC_URL) return console.log('MAX webhook пропущен: нет MAX_BOT_TOKEN или PUBLIC_URL');
+  try {
+    const r = await fetch(`${MAX_API}/subscriptions`, {
+      method: 'POST',
+      headers: { Authorization: E.MAX_BOT_TOKEN, 'Content-Type': 'application/json' },
+      body: JSON.stringify({ url: E.PUBLIC_URL + '/webhook', update_types: ['bot_started', 'message_created'], secret: E.WEBHOOK_SECRET || undefined })
+    });
+    console.log('MAX subscribe', r.status, await r.text());
+  } catch (e) { console.error('MAX subscribe failed', e.message); }
+}
+
+// ---------- Публичное API ----------
+app.get('/api/products', h(async (_, res) => {
+  res.json(ok(await sb.from('products').select('id,name,description,category,price,image_url').eq('active', true).order('sort').order('id')));
+}));
+
+app.post('/api/orders', h(async (req, res) => {
+  const { name, phone, address, comment, items } = req.body || {};
+  const clean = s => String(s || '').trim().slice(0, 500);
+  if (!clean(name) || !clean(address) || clean(phone).replace(/\D/g, '').length < 10 || !Array.isArray(items) || !items.length || items.length > 50)
+    return res.status(400).json({ error: 'Проверьте имя, телефон, адрес и корзину' });
+  const ids = items.map(i => Number(i.id));
+  const prods = ok(await sb.from('products').select('id,name,price').eq('active', true).in('id', ids));
+  const lines = [];
+  let total = 0;
+  for (const i of items) {
+    const p = prods.find(x => x.id === Number(i.id)), q = Math.floor(Number(i.qty));
+    if (!p || !(q > 0 && q <= 99)) return res.status(400).json({ error: 'Товар недоступен, обновите страницу' });
+    lines.push({ id: p.id, name: p.name, price: p.price, qty: q });
+    total += p.price * q;
+  }
+  const order = ok(await sb.from('orders').insert({ name: clean(name), phone: clean(phone), address: clean(address), comment: clean(comment), items: lines, total }).select('id').single());
+  maxSend(E.MANAGER_USER_ID, `Новый заказ №${order.id}\n` + lines.map(l => `${l.name} × ${l.qty} = ${rub(l.price * l.qty)}`).join('\n') +
+    `\nИтого: ${rub(total)}\nИмя: ${clean(name)}\nТелефон: ${clean(phone)}\nАдрес: ${clean(address)}` + (clean(comment) ? `\nКомментарий: ${clean(comment)}` : ''));
+  res.json({ id: order.id, total });
+}));
+
+// ---------- Админка ----------
+const pick = b => ({
+  name: String(b.name || '').trim().slice(0, 200),
+  description: String(b.description || '').trim().slice(0, 1000),
+  category: String(b.category || 'Без категории').trim().slice(0, 100),
+  price: Math.max(0, Math.floor(Number(b.price) || 0)),
+  image_url: String(b.image_url || '').slice(0, 1000),
+  active: b.active !== false,
+  sort: Math.floor(Number(b.sort) || 0)
+});
+app.get('/api/admin/products', isAdmin, h(async (_, res) => res.json(ok(await sb.from('products').select('*').order('sort').order('id')))));
+app.post('/api/admin/products', isAdmin, h(async (req, res) => {
+  const p = pick(req.body); if (!p.name) return res.status(400).json({ error: 'Укажите название' });
+  res.json(ok(await sb.from('products').insert(p).select().single()));
+}));
+app.put('/api/admin/products/:id', isAdmin, h(async (req, res) => {
+  const p = pick(req.body); if (!p.name) return res.status(400).json({ error: 'Укажите название' });
+  res.json(ok(await sb.from('products').update(p).eq('id', req.params.id).select().single()));
+}));
+app.delete('/api/admin/products/:id', isAdmin, h(async (req, res) => { ok(await sb.from('products').delete().eq('id', req.params.id)); res.json({ ok: true }); }));
+app.post('/api/admin/upload', isAdmin, upload.single('file'), h(async (req, res) => {
+  const f = req.file;
+  if (!f || !EXT[f.mimetype]) return res.status(400).json({ error: 'Нужен файл JPG, PNG, WEBP или GIF до 5 МБ' });
+  const key = `${Date.now()}-${crypto.randomBytes(4).toString('hex')}.${EXT[f.mimetype]}`;
+  const r = await sb.storage.from(BUCKET).upload(key, f.buffer, { contentType: f.mimetype });
+  if (r.error) throw r.error;
+  res.json({ url: sb.storage.from(BUCKET).getPublicUrl(key).data.publicUrl });
+}));
+app.get('/api/admin/orders', isAdmin, h(async (_, res) => res.json(ok(await sb.from('orders').select('*').order('id', { ascending: false }).limit(100)))));
+app.patch('/api/admin/orders/:id', isAdmin, h(async (req, res) => {
+  const s = ['new', 'processing', 'done', 'cancelled'].includes(req.body.status) ? req.body.status : null;
+  if (!s) return res.status(400).json({ error: 'Неверный статус' });
+  ok(await sb.from('orders').update({ status: s }).eq('id', req.params.id)); res.json({ ok: true });
+}));
+
+const port = E.PORT || 3000;
+app.listen(port, () => { console.log('max-shop on', port); subscribe(); });
