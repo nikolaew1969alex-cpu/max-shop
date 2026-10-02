@@ -1,24 +1,33 @@
-# max-shop
+# MAX Shop — free stack
 
-Магазин для MAX: витрина + админка + бот. Node.js на Render, база и фото в Supabase (бесплатные тарифы).
+Магазин рассчитан на связку **GitHub → Render Free → Supabase Free**.
 
-## 1. Supabase
-1. Создайте проект на supabase.com.
-2. SQL Editor -> вставьте содержимое `schema.sql` -> Run (создаст таблицы, бакет `media` и 3 тестовых товара).
-3. Project Settings -> API: скопируйте Project URL и ключ `service_role` (секретный, только для сервера).
+## Сохранено
+- товары и категории;
+- заказы и статусы;
+- админка `/admin`;
+- MAX webhook и уведомления менеджеру;
+- старое поле `products.image_url` для совместимости.
 
-## 2. GitHub
-Загрузите все файлы этой папки в репозиторий (файл `.env` не загружайте).
+## Добавлено
+- галерея товара: несколько фото + видео;
+- просмотр медиа в карточке товара;
+- загрузка до 12 файлов за раз, до 25 МБ каждый;
+- настройки менеджера прямо в админке: имя, телефон, MAX, Telegram;
+- контакт менеджера показывается клиенту после заказа;
+- кнопка удаления только обработанных/отменённых заказов;
+- старые фото автоматически переносятся в `product_media`.
 
-## 3. Render
-New -> Web Service -> ваш репозиторий. Build Command: `npm install`, Start Command: `npm start`, тариф Free.
-Environment: переменные из `.env.example` (SUPABASE_URL, SUPABASE_SERVICE_KEY, ADMIN_PASSWORD, MAX_BOT_TOKEN, PUBLIC_URL, WEBHOOK_SECRET, MANAGER_USER_ID).
-`PUBLIC_URL` - адрес сервиса, который покажет Render. При старте сервер сам подпишет бота на вебхук.
+## Supabase
+1. Открой Supabase SQL Editor.
+2. Выполни `migration.sql` один раз.
+3. В Render оставь `SUPABASE_URL` и `SUPABASE_SERVICE_KEY` от этого проекта.
+4. `ADMIN_PASSWORD` — пароль админки.
+5. `MAX_BOT_TOKEN`, `MANAGER_USER_ID`, `PUBLIC_URL`, `WEBHOOK_SECRET` — как раньше.
 
-## 4. Менеджер
-Напишите боту `/id`, он ответит вашим user_id. Впишите его в `MANAGER_USER_ID` на Render: новые заказы будут приходить вам в MAX.
+Важно: `migration.sql` не удаляет существующие товары и заказы. Он добавляет таблицы медиа/настроек и переносит старое `image_url` в галерею.
 
-## Адреса
-- `/` - витрина, `/admin` - админка (пароль ADMIN_PASSWORD).
-- Бесплатный Render засыпает без запросов, первый ответ может занять около минуты.
-- Бесплатный Supabase замораживается после недели простоя.
+## Render
+Start command: `npm start`
+
+После push Render автоматически собирает новую версию. На Free сервис может засыпать после простоя — это задержка первого запроса, а не потеря базы: данные находятся в Supabase.
