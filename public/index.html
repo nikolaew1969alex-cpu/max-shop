@@ -1,1 +1,97 @@
-<!doctype html><html lang="ru"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover"><title>Ваш магазин</title><link rel="stylesheet" href="/style.css"></head><body><header><div><h1>Ваш магазин</h1><p>Кухонные товары и полезные приспособления для дома</p></div><div class="header-actions"><button id="managerPhoneBtn" class="manager-btn hidden" type="button">☎ Менеджер</button><button id="managerMaxBtn" class="manager-btn hidden" type="button">💬 MAX</button><button id="cartBtn" class="cart-btn">🛒 <span id="cartLabel">Корзина</span> <span id="cartCount">0</span></button></div></header><main><section id="catalog" class="grid"></section><section id="cart" class="panel hidden"><h2>Корзина</h2><div id="cartItems"></div><div class="total">Итого: <b id="total">0 ₽</b></div><button class="primary" id="checkoutBtn">Перейти к оформлению</button></section><section id="checkout" class="panel hidden"><h2>Оформление заказа</h2><div id="checkoutSummary" class="summary"></div><label>Имя<input id="name" autocomplete="name" placeholder="Ваше имя"></label><label>Телефон<input id="phone" autocomplete="tel" placeholder="+7 ..."></label><label>Доставка<input id="delivery" autocomplete="street-address" placeholder="Адрес или ПВЗ"></label><button class="primary" id="sendOrder">Подтвердить заказ</button><button id="backToCart" class="secondary">Вернуться в корзину</button><p class="hint">Доставку пока оформляем по указанному адресу или ПВЗ.</p></section><section id="success" class="panel hidden success"><h2>Заказ оформлен 🎉</h2><p>Номер заказа:</p><strong id="orderId"></strong><p>Мы получили заказ и ваши контактные данные.</p><div id="successContacts" class="row" style="justify-content:center;flex-wrap:wrap"></div><button class="primary" id="continue">Вернуться в магазин</button></section></main><script>const state={products:[],cart:[],managerPhone:'',managerMaxLink:''};const $=id=>document.getElementById(id);function parseManagerSettings(v){try{const x=JSON.parse(v||'');if(x&&typeof x==='object')return{phone:String(x.phone||''),maxLink:String(x.maxLink||'')}}catch(e){}return{phone:String(v||''),maxLink:''}}async function load(){const [products,settings]=await Promise.all([fetch('/api/products').then(r=>r.json()),fetch('/api/settings').then(r=>r.json()).catch(()=>({}))]);state.products=products;const s=parseManagerSettings(settings.managerPhone);state.managerPhone=s.phone;state.managerMaxLink=s.maxLink;const pb=$('managerPhoneBtn'),mb=$('managerMaxBtn');pb.classList.toggle('hidden',!state.managerPhone);mb.classList.toggle('hidden',!state.managerMaxLink);if(state.managerPhone){pb.textContent='☎ '+state.managerPhone;pb.title='Позвонить менеджеру';pb.onclick=()=>{window.location.href='tel:'+state.managerPhone.replace(/[^+\d]/g,'')}}if(state.managerMaxLink){mb.textContent='💬 MAX';mb.title='Написать менеджеру в MAX';mb.onclick=()=>window.open(state.managerMaxLink,'_blank','noopener')}$('successContacts').innerHTML='';if(state.managerPhone){const b=document.createElement('button');b.textContent='☎ Позвонить менеджеру';b.onclick=()=>{window.location.href='tel:'+state.managerPhone.replace(/[^+\d]/g,'')};$('successContacts').appendChild(b)}if(state.managerMaxLink){const b=document.createElement('button');b.textContent='💬 Написать в MAX';b.onclick=()=>window.open(state.managerMaxLink,'_blank','noopener');$('successContacts').appendChild(b)}render()}function money(v){return new Intl.NumberFormat('ru-RU').format(v)+' ₽'}function esc(s){return String(s).replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]||c))}function gallery(p){const media=[];(p.images?.length?p.images:[p.image]).filter(Boolean).forEach(u=>media.push(`<img src="${u}" alt="${esc(p.name)}">`));if(p.video)media.push(`<video src="${p.video}" controls playsinline preload="metadata"></video>`);if(!media.length)return '<div class="noimg">Фото товара</div>';return `<div class="gallery" data-index="0"><div class="gallery-track">${media.map(m=>`<div class="gallery-slide">${m}</div>`).join('')}</div>${media.length>1?`<button class="gallery-prev" onclick="moveGallery(this,-1)">‹</button><button class="gallery-next" onclick="moveGallery(this,1)">›</button><div class="gallery-dots">${media.map((_,i)=>`<i class="${i?'':'active'}"></i>`).join('')}</div>`:''}</div>`}function render(){ $('catalog').innerHTML=state.products.filter(p=>p.active&&p.stock!==0).map(p=>`<article class="card">${gallery(p)}<div class="cardbody"><h3>${esc(p.name)}</h3><p>${esc(p.description||'')}</p><div class="row"><strong>${money(p.price)}</strong><button class="add-btn" onclick="add('${p.id}')">В корзину</button></div></div></article>`).join('')||'<div class="empty">Добавьте первый товар через админку.</div>';updateCartUI();renderCart()}function moveGallery(btn,delta){const g=btn.closest('.gallery'),track=g.querySelector('.gallery-track'),count=track.children.length;let i=Number(g.dataset.index||0)+delta;if(i<0)i=count-1;if(i>=count)i=0;g.dataset.index=i;track.style.transform=`translateX(-${i*100}%)`;g.querySelectorAll('.gallery-dots i').forEach((d,n)=>d.classList.toggle('active',n===i))}function add(id){const p=state.products.find(x=>x.id===id);if(!p)return;const i=state.cart.find(x=>x.id===id);if(i)i.qty++;else state.cart.push({id:p.id,name:p.name,price:p.price,qty:1});render()}function changeQty(id,delta){const i=state.cart.find(x=>x.id===id);if(!i)return;i.qty+=delta;if(i.qty<1)state.cart=state.cart.filter(x=>x.id!==id);render()}function updateCartUI(){const count=state.cart.reduce((s,x)=>s+x.qty,0);$('cartCount').textContent=count;$('cartBtn').classList.toggle('has-items',count>0);$('cartLabel').textContent=count?'Корзина — в корзине':'Корзина';document.querySelectorAll('.add-btn').forEach(b=>{const card=b.closest('.card'),name=card?.querySelector('h3')?.textContent||'',inCart=state.cart.some(x=>x.name===name);b.classList.toggle('added',inCart);b.textContent=inCart?'✓ В корзине':'В корзину'})}function renderCart(){$('cartItems').innerHTML=state.cart.map(x=>`<div class="cartrow"><span><b>${esc(x.name)}</b><br><small>${money(x.price)} × ${x.qty}</small></span><span class="qty"><button onclick="changeQty('${x.id}',-1)">−</button><b>${x.qty}</b><button onclick="changeQty('${x.id}',1)">+</button></span></div>`).join('')||'<div class="empty">Корзина пуста</div>';const total=state.cart.reduce((s,x)=>s+x.price*x.qty,0);$('total').textContent=money(total);$('checkoutSummary').innerHTML=state.cart.length?state.cart.map(x=>`<div>${esc(x.name)} × ${x.qty} — <b>${money(x.price*x.qty)}</b></div>`).join('')+'<hr><div><b>Итого: '+money(total)+'</b></div>':''}function show(id){['catalog','cart','checkout','success'].forEach(x=>$(x).classList.toggle('hidden',x!==id));if(id==='checkout')renderCart()}$('cartBtn').onclick=()=>show('cart');$('checkoutBtn').onclick=()=>{if(!state.cart.length)return alert('Добавьте товар в корзину');show('checkout')};$('backToCart').onclick=()=>show('cart');$('continue').onclick=()=>show('catalog');$('sendOrder').onclick=async()=>{if(!state.cart.length)return alert('Корзина пуста');const name=$('name').value.trim(),phone=$('phone').value.trim(),delivery=$('delivery').value.trim();if(!name||!phone||!delivery)return alert('Заполните имя, телефон и адрес/ПВЗ');const r=await fetch('/api/orders',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({customer:{name,phone},items:state.cart,delivery})});const d=await r.json();if(!r.ok)return alert(d.error||'Не удалось оформить заказ');$('orderId').textContent=d.order.id;state.cart=[];$('name').value='';$('phone').value='';$('delivery').value='';show('success');updateCartUI()};load();</script></body></html>
+<!DOCTYPE html>
+<html lang="ru"><head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Ваш магазин</title>
+<style>
+:root{--bg:#eef3f4;--card:#fff;--ink:#17323a;--mute:#5d7279;--line:#d5e0e3;--acc:#f2b632;--accink:#3a2a00;--tile:#e2edf0}
+@media (prefers-color-scheme:dark){:root{--bg:#0f1f24;--card:#172b32;--ink:#e8f1f3;--mute:#93a9af;--line:#26414a;--tile:#1f3a43}}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--ink);font:400 16px/1.45 system-ui,-apple-system,"Segoe UI",Roboto,sans-serif;padding:env(safe-area-inset-top) 0 90px}
+header{padding:20px 16px 8px;max-width:760px;margin:0 auto}
+h1{font-size:28px;margin:0 0 4px}header p{margin:0;color:var(--mute)}
+.chips{display:flex;gap:8px;overflow-x:auto;padding:12px 16px;max-width:760px;margin:0 auto}
+.chip{flex:none;border:1px solid var(--line);background:var(--card);color:var(--ink);border-radius:20px;padding:8px 14px;font:inherit;cursor:pointer}
+.chip[aria-pressed=true]{background:var(--ink);color:var(--bg);border-color:var(--ink)}
+.grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(160px,1fr));gap:12px;padding:4px 16px;max-width:760px;margin:0 auto}
+.card{background:var(--card);border:1px solid var(--line);border-radius:14px;overflow:hidden;display:flex;flex-direction:column}
+.pic{background:var(--tile);height:120px;display:grid;place-items:center;font-size:44px}
+.pic img{width:100%;height:100%;object-fit:cover}
+.body{padding:10px 12px 12px;display:flex;flex-direction:column;gap:4px;flex:1}
+.name{font-weight:700;line-height:1.2}.desc{font-size:13px;color:var(--mute);flex:1}
+.row{display:flex;align-items:center;justify-content:space-between;gap:8px;margin-top:6px}.price{font-weight:800}
+button{font:inherit;cursor:pointer}
+button:focus-visible,input:focus-visible,textarea:focus-visible{outline:3px solid var(--acc);outline-offset:2px}
+.add{background:var(--acc);color:var(--accink);border:0;border-radius:10px;padding:8px 12px;font-weight:700}
+.qty{display:flex;align-items:center;gap:6px}
+.qty button{width:32px;height:32px;border-radius:10px;border:1px solid var(--line);background:var(--card);color:var(--ink);font-size:18px}
+.bar{position:fixed;left:0;right:0;bottom:0;padding:10px 16px calc(10px + env(safe-area-inset-bottom));background:var(--bg);border-top:1px solid var(--line)}
+.bar button{display:flex;justify-content:space-between;width:100%;max-width:728px;margin:0 auto;background:var(--ink);color:var(--bg);border:0;border-radius:14px;padding:14px 18px;font-weight:700}
+.bar button:disabled{opacity:.45;cursor:default}
+.sheet{position:fixed;inset:0;background:rgba(0,0,0,.45);display:none;align-items:flex-end;justify-content:center}.sheet.open{display:flex}
+.panel{background:var(--bg);width:100%;max-width:760px;max-height:92%;overflow:auto;border-radius:18px 18px 0 0;padding:18px 16px calc(18px + env(safe-area-inset-bottom))}
+.panel h2{margin:0 0 12px;font-size:22px}
+.line{display:flex;align-items:center;gap:10px;padding:10px 0;border-bottom:1px solid var(--line)}.line .t{flex:1}
+.total{display:flex;justify-content:space-between;font-weight:800;font-size:18px;padding:14px 0}
+label{display:block;font-size:14px;color:var(--mute);margin-top:10px}
+input,textarea{width:100%;font:inherit;color:var(--ink);background:var(--card);border:1px solid var(--line);border-radius:10px;padding:10px 12px;margin-top:4px}
+.err{color:#c0392b;font-size:14px;min-height:20px;margin-top:8px}
+.main{width:100%;background:var(--acc);color:var(--accink);border:0;border-radius:12px;padding:14px;font-weight:800;margin-top:6px}
+.link{background:none;border:0;color:var(--mute);padding:10px 0;width:100%}
+.empty{padding:24px 16px;color:var(--mute);text-align:center;grid-column:1/-1}
+</style></head><body>
+<header><h1>Ваш магазин</h1><p>Кухонные товары и полезные приспособления для дома</p></header>
+<div class="chips" id="chips" role="group" aria-label="Категории"></div>
+<main class="grid" id="grid"><div class="empty">Загружаем товары…</div></main>
+<div class="bar"><button id="cartBtn" disabled><span id="cc">Корзина пуста</span><span id="cs"></span></button></div>
+<div class="sheet" id="sheet" role="dialog" aria-modal="true"><div class="panel" id="panel"></div></div>
+<script>
+var P=[],cart={},cat="Все",$=function(i){return document.getElementById(i)};
+try{cart=JSON.parse(localStorage.getItem("cart")||"{}")||{}}catch(e){}
+var fmt=function(n){return Number(n).toLocaleString("ru-RU")+" ₽"};
+var esc=function(s){var d=document.createElement("div");d.textContent=s==null?"":s;return d.innerHTML.replace(/"/g,"&quot;")};
+function save(){try{localStorage.setItem("cart",JSON.stringify(cart))}catch(e){}}
+function items(){return P.filter(function(p){return cart[p.id]}).map(function(p){return{p:p,q:cart[p.id]}})}
+function total(){return items().reduce(function(a,x){return a+x.p.price*x.q},0)}
+function count(){return items().reduce(function(a,x){return a+x.q},0)}
+function chg(id,d){cart[id]=(cart[id]||0)+d;if(cart[id]<=0)delete cart[id];save();render();if($("sheet").classList.contains("open"))openCart()}
+function render(){
+  var cats=["Все"].concat(P.map(function(p){return p.category}).filter(function(v,i,a){return a.indexOf(v)===i}));
+  $("chips").innerHTML=cats.length>2?cats.map(function(c){return '<button class="chip" aria-pressed="'+(c===cat)+'" data-c="'+esc(c)+'">'+esc(c)+'</button>'}).join(""):"";
+  var list=P.filter(function(p){return cat==="Все"||p.category===cat});
+  $("grid").innerHTML=list.length?list.map(function(p){
+    var q=cart[p.id],pic=p.image_url?'<img src="'+esc(p.image_url)+'" alt="" loading="lazy">':'🍽️';
+    var act=q?'<div class="qty"><button data-m="'+p.id+'" aria-label="Убрать одну">−</button><b>'+q+'</b><button data-a="'+p.id+'" aria-label="Добавить ещё">+</button></div>':'<button class="add" data-a="'+p.id+'">В корзину</button>';
+    return '<article class="card"><div class="pic">'+pic+'</div><div class="body"><div class="name">'+esc(p.name)+'</div><div class="desc">'+esc(p.description)+'</div><div class="row"><span class="price">'+fmt(p.price)+'</span>'+act+'</div></div></article>'}).join(""):'<div class="empty">Товаров пока нет</div>';
+  var n=count();$("cartBtn").disabled=!n;$("cc").textContent=n?"Корзина: "+n+" шт.":"Корзина пуста";$("cs").textContent=n?fmt(total()):"";
+}
+function openCart(){
+  var l=items().map(function(x){return '<div class="line"><div class="t"><div class="name">'+esc(x.p.name)+'</div><div class="desc">'+fmt(x.p.price)+'</div></div><div class="qty"><button data-m="'+x.p.id+'" aria-label="Убрать одну">−</button><b>'+x.q+'</b><button data-a="'+x.p.id+'" aria-label="Добавить ещё">+</button></div></div>'}).join("");
+  if(!l){$("sheet").classList.remove("open");return}
+  $("panel").innerHTML='<h2>Корзина</h2>'+l+'<div class="total"><span>Итого</span><span>'+fmt(total())+'</span></div><button class="main" id="go">Оформить заказ</button><button class="link" id="x">Продолжить покупки</button>';
+  $("sheet").classList.add("open");
+}
+function form(){
+  $("panel").innerHTML='<h2>Оформление заказа</h2><label for="fn">Имя</label><input id="fn" autocomplete="name"><label for="fp">Телефон</label><input id="fp" type="tel" autocomplete="tel" placeholder="+7"><label for="fa">Адрес доставки</label><textarea id="fa" rows="2"></textarea><label for="fc">Комментарий (необязательно)</label><input id="fc"><div class="err" id="err" role="alert"></div><div class="total"><span>К оплате</span><span>'+fmt(total())+'</span></div><button class="main" id="send">Отправить заказ</button><button class="link" id="back">Назад в корзину</button>';
+}
+document.addEventListener("click",function(e){
+  var t=e.target.closest("button");if(!t){if(e.target===$("sheet"))$("sheet").classList.remove("open");return}
+  if(t.dataset.c){cat=t.dataset.c;render()}
+  else if(t.dataset.a)chg(+t.dataset.a,1);else if(t.dataset.m)chg(+t.dataset.m,-1);
+  else if(t.id==="cartBtn")openCart();else if(t.id==="go")form();
+  else if(t.id==="x"||t.id==="close")$("sheet").classList.remove("open");else if(t.id==="back")openCart();
+  else if(t.id==="send"){
+    var b={name:$("fn").value,phone:$("fp").value,address:$("fa").value,comment:$("fc").value,items:items().map(function(x){return{id:x.p.id,qty:x.q}})};
+    t.disabled=true;$("err").textContent="";
+    fetch("/api/orders",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify(b)}).then(function(r){return r.json().then(function(j){return{ok:r.ok,j:j}})}).then(function(r){
+      if(!r.ok){$("err").textContent=r.j.error||"Не удалось отправить заказ";t.disabled=false;return}
+      cart={};save();render();
+      $("panel").innerHTML='<h2>Заказ принят</h2><p>Номер заказа: <b>'+r.j.id+'</b>. Мы свяжемся с вами по телефону, чтобы подтвердить доставку и оплату.</p><button class="main" id="close">Закрыть</button>';
+    }).catch(function(){$("err").textContent="Нет связи с сервером. Попробуйте ещё раз.";t.disabled=false});
+  }
+});
+try{if(window.WebApp&&WebApp.ready)WebApp.ready()}catch(e){}
+fetch("/api/products").then(function(r){return r.json()}).then(function(d){P=d;
+  Object.keys(cart).forEach(function(id){if(!P.some(function(p){return p.id==id}))delete cart[id]});render()
+}).catch(function(){$("grid").innerHTML='<div class="empty">Не удалось загрузить товары. Обновите страницу.</div>'});
+</script></body></html>
